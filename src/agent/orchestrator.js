@@ -1,9 +1,10 @@
 /**
  * Orchestrator - Agent principal Claude
  *
- * Coordonne l'ensemble du système : analyse les requêtes utilisateur,
- * délègue aux sub-agents spécialisés, exécute les tools, gère la boucle
- * d'interaction avec l'API Claude.
+ * Coordonne l'ensemble du système avec le Claude Agent SDK :
+ * - Utilise le système d'agents natif du SDK (@anthropic-ai/claude-agent-sdk)
+ * - Claude choisit automatiquement les sub-agents spécialisés
+ * - Gère les tools, conversations, streaming SSE
  *
  * Principe "Discover, Don't Assume" :
  * - Toujours découvrir les capacités avant d'agir
@@ -14,29 +15,26 @@
  * @since 1.0.0
  */
 
-import Anthropic from '@anthropic-ai/sdk';
+import { query } from '@anthropic-ai/claude-agent-sdk';
 import logger from '../utils/logger.js';
 import { AppError } from '../utils/errors.js';
 
 // Import des clients
-import { WordPressAPI } from '../clients/wordpress-api.js';
 import { AnthropicClient } from '../clients/anthropic-client.js';
+import { WordPressAPI } from '../clients/wordpress-api.js';
 import { RedisCache } from '../cache/redis-cache.js';
-// import { GutenbergController } from '../clients/gutenberg-controller.js';
 
 // Import du gestionnaire de conversations
 import { getConversationManager } from '../services/conversation-manager.js';
 
-// Import des sub-agents  (TODO pour plus tard)
-// import { SEOAgent } from './sub-agents/seo-agent.js';
-// import { CopywritingAgent } from './sub-agents/copywriting-agent.js';
-// import { DesignAgent } from './sub-agents/design-agent.js';
-// import { TechnicalAgent } from './sub-agents/technical-agent.js';
+// Import de la configuration des sub-agents
+import { agentsConfig } from './agents-config.js';
 
 // Import des tools
 import { getWordPressTools } from './tools/wordpress-tools.js';
 import { getGutenbergTools } from './tools/gutenberg-tools.js';
 import { getFSETools } from './tools/fse-tools.js';
+import { getSubAgentTools } from './tools/subagent-tools.js';
 
 /**
  * Keywords pour détecter les requêtes nécessitant un plan
@@ -210,10 +208,10 @@ const ORCHESTRATOR_SYSTEM_PROMPT = `Tu es un agent expert en création de sites 
    - Réessayer (max 3 fois)
 
 8. DÉLÉGATION AUX SUB-AGENTS
-   - SEO Agent : Optimisation structure, mots-clés, meta
-   - Copywriting Agent : Contenu persuasif, CTAs
-   - Design Agent : Layout, couleurs, UX
-   - Technical Agent : Validation, performance
+   Utilise 'delegate_to_subagent' pour déléguer à un expert spécialisé:
+   - 🔍 SEO Agent : Optimisation structure, mots-clés, meta descriptions, URL slugs
+   - ✍️ Copywriting Agent : Contenu persuasif, titres accrocheurs, CTAs efficaces
+   - 🎨 Design Agent : Layout, couleurs, UX, accessibilité, design system
 
 WORKFLOW STANDARD:
 1. Découverte globale (blocs + design system) - SANS EXPLICATION
@@ -236,19 +234,17 @@ export class Orchestrator {
 	 *
 	 * @param {Object} config - Configuration complète
 	 * @param {Object} config.wordpress - Config WordPress
-	 * @param {Object} config.anthropic - Config Anthropic
+	 * @param {Object} config.anthropic - Config Anthropic (avec apiKey)
 	 * @param {Object} config.redis - Config Redis
 	 * @param {Object} config.cache - Config cache
 	 * @param {Object} config.playwright - Config Playwright
 	 */
 	constructor(config) {
 		this.config = config;
-		this.anthropicClient = null;
 		this.wordpressAPI = null;
-		this.gutenbergController = null;
-		this.subAgents = {};
 		this.tools = [];
-		// Note: conversationHistory is NOT stored here to avoid sharing between concurrent requests
+		this.mcpTools = []; // Tools au format SDK MCP
+		// Note: Le SDK gère son propre client Anthropic
 	}
 
 	/**
@@ -281,20 +277,31 @@ export class Orchestrator {
 			// this.gutenbergController = new GutenbergController(this.config.playwright);
 			// await this.gutenbergController.initialize();
 
-			// TODO: Initialiser les sub-agents (Phase 4)
-			// this.subAgents.seo = new SEOAgent(this.anthropicClient, this.config);
-			// this.subAgents.copywriting = new CopywritingAgent(this.anthropicClient, this.config);
-			// this.subAgents.design = new DesignAgent(this.anthropicClient, this.config);
-			// this.subAgents.technical = new TechnicalAgent(this.anthropicClient, this.config);
+			// Note: Les sub-agents sont maintenant gérés via delegation avec delegate_to_subagent
+			// Ils sont instanciés à la demande dans subagent-tools.js
 
 			// Charger tous les tools disponibles
-			this.tools = [
-				...getWordPressTools(this.wordpressAPI),
-				...getGutenbergTools(), // Real-time Gutenberg tools via PostMessage
-				...getFSETools(this.wordpressAPI),
+			const wordpressTools = getWordPressTools(this.wordpressAPI);
+			const gutenbergTools = getGutenbergTools(); // Real-time Gutenberg tools via PostMessage
+			const fseTools = getFSETools(this.wordpressAPI);
+
+			// Combiner les tools de base
+			const baseTools = [
+				...wordpressTools,
+				...gutenbergTools,
+				...fseTools,
 			];
 
-			logger.info(`Orchestrator initialized successfully with ${this.tools.length} tools`);
+			// Ajouter les sub-agent tools (qui ont besoin de tous les tools pour filtrer)
+			const subAgentTools = getSubAgentTools(this.anthropicClient, baseTools, this.config);
+
+			// Combiner tous les tools
+			this.tools = [
+				...baseTools,
+				...subAgentTools,
+			];
+
+			logger.info(`Orchestrator initialized successfully with ${this.tools.length} tools (including ${subAgentTools.length} sub-agent delegation tool)`);
 		} catch (error) {
 			logger.error('Failed to initialize Orchestrator', { error: error.message });
 			throw new AppError('Orchestrator initialization failed', 500);
@@ -764,6 +771,17 @@ RÈGLES:
 				totalUsage.input_tokens += response.usage.input_tokens;
 				totalUsage.output_tokens += response.usage.output_tokens;
 
+				// Extract and emit thinking content if present
+				if (otherOptions.extended_thinking && options.onThinking) {
+					const thinkingContent = this.anthropicClient.extractThinking(response);
+					if (thinkingContent) {
+						logger.info('Extended thinking content extracted', {
+							length: thinkingContent.length
+						});
+						options.onThinking(thinkingContent);
+					}
+				}
+
 				if (response.stop_reason === 'tool_use') {
 					const toolCalls = this.anthropicClient.extractToolCalls(response);
 
@@ -879,27 +897,27 @@ RÈGLES:
 	/**
 	 * Délègue une tâche à un sub-agent spécialisé
 	 *
-	 * @param {string} subAgentType - Type de sub-agent (seo, copywriting, design, technical)
+	 * @deprecated Use the 'delegate_to_subagent' tool instead
+	 * @param {string} subAgentType - Type de sub-agent (seo, copywriting, design)
 	 * @param {string} task - Tâche à accomplir
 	 * @param {Object} context - Contexte additionnel
 	 * @returns {Promise<Object>} Résultat du sub-agent
 	 */
 	async delegateToSubAgent(subAgentType, task, context = {}) {
 		try {
-			logger.info(`Delegating to ${subAgentType} sub-agent`, { task });
+			logger.warn(`delegateToSubAgent() is deprecated. Use 'delegate_to_subagent' tool instead.`);
 
-			// TODO: Implémenter la délégation
-			// const subAgent = this.subAgents[subAgentType];
-			// if (!subAgent) {
-			//   throw new AppError(`Unknown sub-agent type: ${subAgentType}`, 400);
-			// }
-			//
-			// return await subAgent.execute(task, context);
+			// Forward to the tool handler
+			const delegateTool = this.tools.find(t => t.name === 'delegate_to_subagent');
+			if (!delegateTool) {
+				throw new AppError('delegate_to_subagent tool not found', 500);
+			}
 
-			return {
-				success: true,
-				message: `Sub-agent ${subAgentType} - Implementation pending`,
-			};
+			return await delegateTool.handler({
+				agent: subAgentType,
+				task,
+				context,
+			});
 		} catch (error) {
 			logger.error(`Error delegating to ${subAgentType} sub-agent`, { error: error.message });
 			throw error;

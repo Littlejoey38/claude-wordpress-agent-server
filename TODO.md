@@ -10,4 +10,9 @@
 - l'iframe est assez fragile, il se recharge parfois sans raison apparente
 - Vérifier que le extended thinking fonctionne vraiment + l'activer par défaut (x1,5 crédit par demande avec extended thinking)
 - Si l'utilisateur est sur l'admin wordpress et qu'il demande des modifications ou une création de page : faire en sorte que l'iframe aille automatiquement sur cette page. On veut que ce soit réactif et dynamique
+- ne pas afficher Erreur: Anthropic API error: 400 {"type":"error","error":{"type":"invalid_request_error","message":"Your credit balance is too low to access the Anthropic API. Please go to Plans & Billing to upgrade or purchase credits."},"request_id":"req_011CUSJKuLVEeDfbdBx9KWdV"}
 
+ quand j'ai plus de sous mais mettre une erreur plus générique. 
+
+ - Bloquer le bouton envoyer tant que "WordPress iframe window ready" n'est pas ready
+ - quand il y a une erreur en console on mets quand meme un succès dans le chat, c'est pas bien

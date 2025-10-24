@@ -174,4 +174,18 @@ export class AnthropicClient {
 		const textBlocks = response.content.filter((block) => block.type === 'text');
 		return textBlocks.map((block) => block.text).join('\n');
 	}
+
+	/**
+	 * Extrait le contenu thinking (extended thinking) d'une réponse
+	 *
+	 * @param {Object} response - Réponse de Claude
+	 * @returns {string|null} Contenu du thinking ou null si absent
+	 */
+	extractThinking(response) {
+		const thinkingBlocks = response.content.filter((block) => block.type === 'thinking');
+		if (thinkingBlocks.length === 0) {
+			return null;
+		}
+		return thinkingBlocks.map((block) => block.thinking).join('\n\n');
+	}
 }

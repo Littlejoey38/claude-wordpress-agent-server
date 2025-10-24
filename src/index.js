@@ -271,6 +271,10 @@ app.post('/agent/process-stream', async (req, res) => {
 					resultSummary: success ? 'OK' : (toolResult?.message || 'Error')
 				});
 			},
+			onThinking: (thinkingContent) => {
+				// NEW: Send thinking content when extended thinking is enabled
+				sendEvent('thinking', { content: thinkingContent });
+			},
 			onFinalResponse: (response, usage, conversationId) => {
 				// Envoyer le conversation_id au frontend pour qu'il puisse continuer la conversation
 				sendEvent('final_response', {
