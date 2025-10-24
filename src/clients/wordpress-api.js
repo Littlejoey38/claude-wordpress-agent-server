@@ -330,4 +330,53 @@ export class WordPressAPI {
 			return null;
 		}
 	}
+
+	/**
+	 * Récupère le contexte condensé d'une page/post
+	 *
+	 * Retourne un résumé de la page sans le contenu brut des blocs (max 500 tokens).
+	 * Utilisé pour injecter le contexte de la page actuelle dans les prompts de l'agent.
+	 *
+	 * @param {number} postId - ID du post/page
+	 * @returns {Promise<Object>} Contexte de la page
+	 */
+	async getPageContext(postId) {
+		const response = await this.client.get(`/claude-agent/v1/page/${postId}/context`);
+		return response.data;
+	}
+
+	/**
+	 * Met à jour un block spécifique dans un post sans toucher aux autres
+	 *
+	 * IMPORTANT: Utilisez ceci au lieu de updatePost quand vous voulez modifier
+	 * UNIQUEMENT un block spécifique et garder le reste de la page intact.
+	 *
+	 * @param {number} postId - ID du post
+	 * @param {string} clientId - Client ID du block à modifier
+	 * @param {Object} attributes - Nouveaux attributs du block
+	 * @returns {Promise<Object>} Résultat de la mise à jour
+	 */
+	async updateBlockInPost(postId, clientId, attributes) {
+		const response = await this.client.put(
+			`/claude-agent/v1/posts/${postId}/blocks/${clientId}`,
+			{ attributes }
+		);
+		return response.data;
+	}
+
+	/**
+	 * Met à jour un block par son index/position dans le post
+	 *
+	 * @param {number} postId - ID du post
+	 * @param {number} blockIndex - Index du block (0-based)
+	 * @param {Object} attributes - Nouveaux attributs du block
+	 * @returns {Promise<Object>} Résultat de la mise à jour
+	 */
+	async updateBlockByIndex(postId, blockIndex, attributes) {
+		const response = await this.client.put(
+			`/claude-agent/v1/posts/${postId}/blocks/index/${blockIndex}`,
+			{ attributes }
+		);
+		return response.data;
+	}
 }

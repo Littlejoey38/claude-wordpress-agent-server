@@ -1,0 +1,13 @@
+- On dirait que le contenu de la page actuel n'est pas envoyé. Attention cependant a ne pas envoyer le contenu brut des blocks mais un résumé sinon l'IA va exploser son contexte
+- Les sub agents ne sont pas faits
+- Il faut ajouter un système d'historique de conversation pour retourner sur une autre conversation
+- Il faut ajouter un bouton icone pour recharger l'iframe
+- Il faut que l'insertion des blocks gutenberg se fasse par l'API front-end de gutenberg pour avoir un apercu en temps réel de ce que l'IA est entrain de faire.
+- Si je sélectionne un block précis sur ma page, je veux qu'il soit envoyé en context à l'agent pour qu'il puisse l'éditer. 
+- Le plan mode ne fonctionne pas. Il doit crééer un todo puis demande si l'utilisateur veux l'executer ou demander une correction
+- La mise à jour des styles globaux ne fonctionne pas + modification des fonts pas encore dispo mais à créé
+- Ajouter un bouton pour réduire la sidebar et avoir l'iframe en plus grand
+- l'iframe est assez fragile, il se recharge parfois sans raison apparente
+- Vérifier que le extended thinking fonctionne vraiment + l'activer par défaut (x1,5 crédit par demande avec extended thinking)
+- Si l'utilisateur est sur l'admin wordpress et qu'il demande des modifications ou une création de page : faire en sorte que l'iframe aille automatiquement sur cette page. On veut que ce soit réactif et dynamique
+

@@ -15,8 +15,8 @@ import { AppError } from '../utils/errors.js';
 /**
  * Configuration par défaut pour Claude
  */
-const DEFAULT_MODEL = 'claude-sonnet-4-20250514';
-const DEFAULT_MAX_TOKENS = 4096;
+const DEFAULT_MODEL = 'claude-sonnet-4-5';
+const DEFAULT_MAX_TOKENS = 8192;
 
 /**
  * Classe AnthropicClient
@@ -49,6 +49,7 @@ export class AnthropicClient {
 	 * @param {Array} params.tools - Tools disponibles
 	 * @param {number} params.max_tokens - Tokens max
 	 * @param {string} params.model - Modèle à utiliser
+	 * @param {boolean} params.extended_thinking - Enable extended thinking mode
 	 * @returns {Promise<Object>} Réponse de Claude
 	 */
 	async sendMessage({
@@ -57,6 +58,7 @@ export class AnthropicClient {
 		tools = [],
 		max_tokens = this.defaultMaxTokens,
 		model = this.defaultModel,
+		extended_thinking = false,
 	}) {
 		try {
 			logger.info('Sending message to Claude', {
@@ -64,15 +66,26 @@ export class AnthropicClient {
 				max_tokens,
 				message_count: messages.length,
 				tools_count: tools.length,
+				extended_thinking,
 			});
 
-			const response = await this.client.messages.create({
+			const requestParams = {
 				model,
 				max_tokens,
 				system,
 				messages,
 				tools,
-			});
+			};
+
+			// Add extended thinking parameter if enabled
+			if (extended_thinking) {
+				requestParams.thinking = {
+					type: 'enabled',
+					budget_tokens: 5000,
+				};
+			}
+
+			const response = await this.client.messages.create(requestParams);
 
 			logger.info('Received response from Claude', {
 				stop_reason: response.stop_reason,
@@ -81,7 +94,7 @@ export class AnthropicClient {
 
 			return response;
 		} catch (error) {
-			logger.error('Failed to send message to Claude', { error: error.message });
+			// Don't log here to avoid duplicate error messages (logged in orchestrator)
 			throw new AppError(`Anthropic API error: ${error.message}`, 500);
 		}
 	}

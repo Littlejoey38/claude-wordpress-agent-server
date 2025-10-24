@@ -39,7 +39,27 @@ export function getWordPressTools(wordpressAPI) {
 			},
 		},
 
-		// 2. Inspecter le schéma d'un bloc
+		// 2. Obtenir le résumé condensé d'une page
+		{
+			name: 'get_page_summary',
+			description: 'Obtient un résumé condensé d\'une page/post existante : structure des blocs, contenu textuel (headings, paragraphes), images, boutons, vidéos, etc. TRÈS UTILE pour comprendre le contenu d\'une page avant de la modifier. Ce résumé est optimisé pour ne pas surcharger le contexte (500-800 tokens max).',
+			input_schema: {
+				type: 'object',
+				properties: {
+					post_id: {
+						type: 'number',
+						description: 'ID du post/page dont tu veux obtenir le résumé',
+					},
+				},
+				required: ['post_id'],
+			},
+			handler: async (input) => {
+				logger.info('Tool: get_page_summary', { post_id: input.post_id });
+				return await wordpressAPI.getPageContext(input.post_id);
+			},
+		},
+
+		// 3. Inspecter le schéma d'un bloc
 		{
 			name: 'inspect_block_schema',
 			description: 'Inspecte le schéma complet d\'un bloc spécifique pour connaître tous ses attributs, supports et capacités. Utilise ceci pour comprendre exactement ce qu\'un bloc peut faire.',
@@ -59,7 +79,7 @@ export function getWordPressTools(wordpressAPI) {
 			},
 		},
 
-		// 3. Récupérer un groupe d'attributs (progressive disclosure)
+		// 4. Récupérer un groupe d'attributs (progressive disclosure)
 		{
 			name: 'get_block_attributes_group',
 			description: 'Récupère un groupe d\'attributs spécifique d\'un bloc (progressive disclosure). Pour les blocs complexes (50+ attributs), utilise ceci au lieu de inspect_block_schema pour éviter de surcharger le contexte.',
@@ -84,7 +104,7 @@ export function getWordPressTools(wordpressAPI) {
 			},
 		},
 
-		// 4. Récupérer le design system du thème
+		// 5. Récupérer le design system du thème
 		{
 			name: 'get_theme_design_system',
 			description: 'Récupère le design system complet du thème (couleurs, polices, tailles de police, espacements). TOUJOURS utiliser ces valeurs pour garantir la cohérence visuelle du site.',
@@ -99,7 +119,7 @@ export function getWordPressTools(wordpressAPI) {
 			},
 		},
 
-		// 5. Récupérer la LISTE des patterns disponibles (RÉSUMÉ SEULEMENT)
+		// 6. Récupérer la LISTE des patterns disponibles (RÉSUMÉ SEULEMENT)
 		{
 			name: 'get_patterns',
 			description: 'Récupère la LISTE des patterns disponibles (noms et catégories uniquement). Pour obtenir le contenu HTML d\'un pattern spécifique, utilise get_pattern_details. Progressive Disclosure: cette approche évite de surcharger le contexte.',
@@ -122,7 +142,7 @@ export function getWordPressTools(wordpressAPI) {
 			},
 		},
 
-		// 5b. Récupérer le CONTENU d'un pattern spécifique
+		// 6b. Récupérer le CONTENU d'un pattern spécifique
 		{
 			name: 'get_pattern_details',
 			description: 'Récupère le contenu HTML complet d\'un pattern spécifique par son nom. Utilise ceci UNIQUEMENT quand tu as choisi un pattern via get_patterns.',
@@ -155,7 +175,7 @@ export function getWordPressTools(wordpressAPI) {
 			},
 		},
 
-		// 6. Créer un nouveau post
+		// 7. Créer un nouveau post
 		{
 			name: 'create_post',
 			description: 'Crée un nouveau post ou page WordPress avec du contenu Gutenberg. Le contenu DOIT être au format HTML Gutenberg valide (commentaires <!-- wp:bloc --> inclus).',
@@ -188,10 +208,10 @@ export function getWordPressTools(wordpressAPI) {
 			},
 		},
 
-		// 7. Mettre à jour un post existant
+		// 8. Mettre à jour les métadonnées d'un post (titre, statut, etc.)
 		{
-			name: 'update_post',
-			description: 'Met à jour un post WordPress existant (titre, contenu, statut, etc.). Utilise ceci pour modifier un post après sa création.',
+			name: 'update_post_title',
+			description: '⚠️ Met à jour UNIQUEMENT les métadonnées d\'un post WordPress (titre, statut, slug, excerpt). NE PEUT PAS modifier le contenu des blocs. Pour modifier le contenu, utilise OBLIGATOIREMENT les tools en temps réel: update_block_realtime, insert_block_realtime, remove_block_realtime, replace_block_realtime.',
 			input_schema: {
 				type: 'object',
 				properties: {
@@ -201,28 +221,38 @@ export function getWordPressTools(wordpressAPI) {
 					},
 					title: {
 						type: 'string',
-						description: 'Nouveau titre (optionnel)',
-					},
-					content: {
-						type: 'string',
-						description: 'Nouveau contenu HTML Gutenberg (optionnel)',
+						description: 'Nouveau titre du post (optionnel)',
 					},
 					status: {
 						type: 'string',
 						enum: ['draft', 'publish', 'pending', 'private'],
-						description: 'Nouveau statut (optionnel)',
+						description: 'Nouveau statut de publication (optionnel)',
+					},
+					slug: {
+						type: 'string',
+						description: 'Nouveau slug URL (optionnel)',
+					},
+					excerpt: {
+						type: 'string',
+						description: 'Nouvel extrait/résumé (optionnel)',
 					},
 				},
 				required: ['post_id'],
 			},
 			handler: async (input) => {
 				const { post_id, ...updateData } = input;
-				logger.info('Tool: update_post', { post_id });
+
+				// CRITICAL: Block content modification to force real-time Gutenberg tools usage
+				if (updateData.content) {
+					throw new Error('❌ ERREUR: Le tool update_post_title ne peut PAS modifier le contenu (content). Utilise les tools en temps réel: update_block_realtime, insert_block_realtime, remove_block_realtime pour modifier les blocs.');
+				}
+
+				logger.info('Tool: update_post_title', { post_id, fields: Object.keys(updateData) });
 				return await wordpressAPI.updatePost(post_id, updateData);
 			},
 		},
 
-		// 8. Chercher des templates de blocs pré-validés
+		// 9. Chercher des templates de blocs pré-validés
 		{
 			name: 'search_block_templates',
 			description: 'Cherche des templates JSON pré-validés pour un bloc spécifique. Les templates sont des configurations testées et validées qui garantissent le bon fonctionnement du bloc.',

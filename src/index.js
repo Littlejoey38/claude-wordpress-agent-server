@@ -13,6 +13,7 @@ import express from 'express';
 import { Orchestrator } from './agent/orchestrator.js';
 import logger from './utils/logger.js';
 import { AppError } from './utils/errors.js';
+import { getPendingRequestsManager } from './services/pending-requests-manager.js';
 
 // Charger les variables d'environnement
 dotenv.config();
@@ -159,6 +160,56 @@ app.post('/agent/process', async (req, res) => {
 });
 
 /**
+ * Route pour recevoir les réponses de l'iframe WordPress (callback HTTP)
+ *
+ * POST /agent/iframe-callback
+ * Body: { requestId: string, result: any, success: boolean }
+ */
+app.post('/agent/iframe-callback', async (req, res) => {
+	try {
+		const { requestId, result, success = true } = req.body;
+
+		if (!requestId) {
+			throw new AppError('Invalid callback: requestId is required', 400);
+		}
+
+		// Changed from logger.debug to logger.info to see callbacks in production logs
+		logger.info('Received iframe callback', {
+			requestId,
+			success,
+			resultType: result?.type,
+			hasData: !!result,
+		});
+
+		// Récupérer le gestionnaire de requêtes en attente
+		const pendingManager = getPendingRequestsManager();
+
+		// Résoudre ou rejeter la requête en attente
+		if (success) {
+			const resolved = pendingManager.resolvePendingRequest(requestId, result);
+			if (!resolved) {
+				logger.warn('No pending request found for callback', { requestId, resultType: result?.type });
+			} else {
+				logger.info('Callback resolved successfully', { requestId });
+			}
+		} else {
+			const error = new Error(result?.error || 'Iframe callback failed');
+			pendingManager.rejectPendingRequest(requestId, error);
+		}
+
+		res.json({ success: true, message: 'Callback received' });
+	} catch (error) {
+		logger.error('Error processing iframe callback', { error: error.message });
+
+		const statusCode = error instanceof AppError ? error.statusCode : 500;
+		res.status(statusCode).json({
+			success: false,
+			error: error.message,
+		});
+	}
+});
+
+/**
  * Route streaming pour voir les actions de l'agent en temps réel (SSE)
  *
  * POST /agent/process-stream
@@ -166,7 +217,7 @@ app.post('/agent/process', async (req, res) => {
  */
 app.post('/agent/process-stream', async (req, res) => {
 	try {
-		const { message, conversation_id, wordpress_context, options = {} } = req.body;
+		const { message, conversation_id, wordpress_context, permission_type = 'full', extended_thinking = false, enabled_tools = [], options = {} } = req.body;
 
 		if (!message || typeof message !== 'string') {
 			throw new AppError('Invalid request: message is required', 400);
@@ -192,7 +243,10 @@ app.post('/agent/process-stream', async (req, res) => {
 			message: message.substring(0, 100),
 			conversation_id: conversation_id || 'new',
 			has_context: !!wordpress_context,
-			context: wordpress_context
+			context: wordpress_context,
+			permission_type: permission_type,
+			extended_thinking: extended_thinking,
+			enabled_tools_count: enabled_tools.length
 		});
 
 		// Process request with streaming callbacks, WordPress context, and conversation persistence
@@ -200,6 +254,9 @@ app.post('/agent/process-stream', async (req, res) => {
 			...options,
 			conversation_id, // IMPORTANT: Passer le conversation_id pour charger l'historique
 			wordpress_context,
+			permission_type, // NEW: Pass permission type to orchestrator
+			extended_thinking, // NEW: Pass extended thinking to orchestrator
+			enabled_tools, // NEW: Pass enabled tools array to filter available tools
 			onIterationStart: (iteration, maxIterations) => {
 				sendEvent('iteration_start', { iteration, maxIterations });
 			},
@@ -210,6 +267,7 @@ app.post('/agent/process-stream', async (req, res) => {
 				sendEvent('tool_result', {
 					toolName,
 					success,
+					result: toolResult, // IMPORTANT: Send full result for Gutenberg commands with _command field
 					resultSummary: success ? 'OK' : (toolResult?.message || 'Error')
 				});
 			},

@@ -35,8 +35,31 @@ import { getConversationManager } from '../services/conversation-manager.js';
 
 // Import des tools
 import { getWordPressTools } from './tools/wordpress-tools.js';
-// import { getGutenbergTools } from './tools/gutenberg-tools.js';
+import { getGutenbergTools } from './tools/gutenberg-tools.js';
 import { getFSETools } from './tools/fse-tools.js';
+
+/**
+ * Keywords pour détecter les requêtes nécessitant un plan
+ */
+const PLAN_MODE_KEYWORDS = [
+	'créer',
+	'faire',
+	'mettre en place',
+	'développer',
+	'construire',
+	'générer',
+	'configurer',
+	'implémenter',
+	'installer',
+	'setup',
+	'create',
+	'build',
+	'develop',
+	'generate',
+	'implement',
+	'set up',
+	'make',
+];
 
 /**
  * System prompt pour l'orchestrateur (extrait des specs lignes 1065-1121)
@@ -76,17 +99,117 @@ const ORCHESTRATOR_SYSTEM_PROMPT = `Tu es un agent expert en création de sites 
      * Ajouter groupes supplémentaires UNIQUEMENT si nécessaire
    - JAMAIS charger tous les attributs d'un coup
 
-4. RESPECT DU DESIGN SYSTEM
+4. MODIFICATION DE CONTENU EN TEMPS RÉEL (PRÉCISION CHIRURGICALE!)
+
+   🎯 MÉTHODE RECOMMANDÉE - IDs PERSISTANTS (claudeAgentId):
+
+   1️⃣ get_blocks_structure()
+      → Obtient TOUS les blocs avec DEUX identifiants:
+        • claudeAgentId: ID PERSISTANT (survit aux rechargements de page) ⭐ RECOMMANDÉ
+        • clientId: ID volatile (change à chaque reload) ⚠️ ÉVITER
+
+   2️⃣ update_block_by_agent_id({ agentId: "...", attributes: {...} })
+      → Modifie UNIQUEMENT ce bloc en TEMPS RÉEL dans Gutenberg
+      → Utilise l'ID PERSISTANT (claudeAgentId)
+      → ✅ Fonctionne même si l'utilisateur rafraîchit la page!
+
+   ⚠️ RÈGLES CRITIQUES:
+   - TOUJOURS PRÉFÉRER update_block_by_agent_id (IDs persistants)
+   - TOUJOURS appeler get_blocks_structure AVANT de modifier
+   - Pour modifier 5 blocs = 5 appels à update_block_by_agent_id
+   - Ne JAMAIS essayer de modifier plusieurs blocs en un seul appel
+
+   📋 EXEMPLE ULTRA SIMPLE:
+
+   get_blocks_structure() → [
+     {
+       "claudeAgentId": "550e8400-e29b-41d4-a716-446655440000",  ← ID PERSISTANT ⭐
+       "clientId": "abc123",  ← volatile (change au reload)
+       "name": "core/heading",
+       "attributes": { "content": "🤖 Titre avec emoji" }
+     },
+     {
+       "claudeAgentId": "6ba7b810-9dad-11d1-80b4-00c04fd430c8",
+       "clientId": "def456",
+       "name": "core/paragraph",
+       "attributes": { "content": "Texte..." }
+     }
+   ]
+
+   // Supprimer l'emoji du premier heading (avec ID persistant):
+   update_block_by_agent_id({
+     agentId: "550e8400-e29b-41d4-a716-446655440000",
+     attributes: {content: "Titre sans emoji"}
+   })
+   ✅ Tous les autres blocs restent intacts automatiquement!
+
+   // Modifier aussi le paragraph:
+   update_block_by_agent_id({
+     agentId: "6ba7b810-9dad-11d1-80b4-00c04fd430c8",
+     attributes: {content: "Nouveau texte"}
+   })
+   ✅ Le heading reste inchangé!
+
+   🎯 OUTILS DISPONIBLES (par ordre de préférence):
+   1. update_block_by_agent_id (⭐ RECOMMANDÉ - IDs persistants)
+   2. remove_block_by_agent_id (⭐ RECOMMANDÉ)
+   3. replace_block_by_agent_id (⭐ RECOMMANDÉ)
+   4. update_block_by_clientid (⚠️ Fallback si agentId indisponible)
+   5. remove_block_realtime (⚠️ Fallback)
+   6. replace_block_realtime (⚠️ Fallback)
+
+   ❌ INTERDICTIONS ABSOLUES:
+   - JAMAIS utiliser update_post pour modifier du contenu (trop lourd)
+   - JAMAIS générer du HTML manuellement
+   - JAMAIS modifier un bloc sans avoir appelé get_blocks_structure d'abord
+
+   ✅ L'utilisateur voit TOUS les changements en temps réel dans Gutenberg
+
+5. INSERTION DE SECTIONS COMPLÈTES AVEC PATTERNS
+
+   🎯 RÈGLE IMPORTANTE: Pour insérer ou remplacer des sections complètes (hero, features, pricing, etc.),
+      TOUJOURS utiliser les PATTERNS au lieu de créer des blocs manuellement!
+
+   🔧 DEUX OUTILS DISPONIBLES:
+
+   A) insert_pattern - INSÉRER un nouveau pattern
+      WORKFLOW:
+      1️⃣ get_patterns() → Voir tous les patterns disponibles
+      2️⃣ insert_pattern({ pattern_slug: "...", index: 0 }) → Insérer le pattern
+
+      📋 EXEMPLE - Ajouter une hero en début de page:
+      get_patterns() → [{ slug: "hero-section", title: "Hero Section", ... }]
+      insert_pattern({ pattern_slug: "hero-section", index: 0 })
+      ✅ Section complète insérée instantanément!
+
+   B) swap_pattern - REMPLACER un bloc existant par un pattern
+      WORKFLOW:
+      1️⃣ get_blocks_structure() → Obtenir le claudeAgentId du bloc à remplacer
+      2️⃣ get_patterns() → Choisir le pattern de remplacement
+      3️⃣ swap_pattern({ agentId: "...", pattern_slug: "..." }) → Faire le swap
+
+      📋 EXEMPLE - Remplacer un paragraphe simple par une hero complète:
+      get_blocks_structure() → [{ claudeAgentId: "550e8400-...", name: "core/paragraph" }]
+      swap_pattern({ agentId: "550e8400-...", pattern_slug: "hero-section" })
+      ✅ Bloc remplacé par une section complète!
+
+   ⚠️ RÈGLES CRITIQUES:
+   - TOUJOURS préférer insert_pattern/swap_pattern pour les sections complètes
+   - N'utilise JAMAIS insert_block_realtime pour insérer des patterns
+   - Les patterns sont déjà validés et optimisés
+   - swap_pattern utilise les claudeAgentId (IDs persistants)
+
+6. RESPECT DU DESIGN SYSTEM
    - TOUJOURS utiliser les couleurs du thème (jamais de hex custom)
    - TOUJOURS utiliser les polices du thème
    - TOUJOURS utiliser les tailles prédéfinies
 
-5. VALIDATION
+7. VALIDATION
    - Si erreur de validation, lire attentivement le message
    - Corriger UNIQUEMENT les attributs en erreur
    - Réessayer (max 3 fois)
 
-6. DÉLÉGATION AUX SUB-AGENTS
+8. DÉLÉGATION AUX SUB-AGENTS
    - SEO Agent : Optimisation structure, mots-clés, meta
    - Copywriting Agent : Contenu persuasif, CTAs
    - Design Agent : Layout, couleurs, UX
@@ -167,7 +290,7 @@ export class Orchestrator {
 			// Charger tous les tools disponibles
 			this.tools = [
 				...getWordPressTools(this.wordpressAPI),
-				// ...getGutenbergTools(this.gutenbergController),  // Phase 3
+				...getGutenbergTools(), // Real-time Gutenberg tools via PostMessage
 				...getFSETools(this.wordpressAPI),
 			];
 
@@ -176,6 +299,102 @@ export class Orchestrator {
 			logger.error('Failed to initialize Orchestrator', { error: error.message });
 			throw new AppError('Orchestrator initialization failed', 500);
 		}
+	}
+
+	/**
+	 * Détecte si une requête nécessite un plan
+	 *
+	 * @param {string} userMessage - Message de l'utilisateur
+	 * @returns {boolean} True si un plan est nécessaire
+	 */
+	shouldCreatePlan(userMessage) {
+		const lowerMessage = userMessage.toLowerCase();
+
+		// Vérifier si la requête contient des mots-clés de plan
+		const hasPlanKeyword = PLAN_MODE_KEYWORDS.some(keyword =>
+			lowerMessage.includes(keyword)
+		);
+
+		// Vérifier si la requête est complexe (plusieurs étapes)
+		const hasMultipleSteps =
+			lowerMessage.includes(' et ') ||
+			lowerMessage.includes(' puis ') ||
+			lowerMessage.includes(' ensuite ') ||
+			lowerMessage.includes(', ') ||
+			lowerMessage.includes(' and ') ||
+			lowerMessage.includes(' then ');
+
+		// Vérifier si la requête contient une liste (1., 2., -, etc.)
+		const hasList = /[0-9]\.|[-*]/.test(userMessage);
+
+		return hasPlanKeyword || hasMultipleSteps || hasList;
+	}
+
+	/**
+	 * Génère un plan d'action pour une requête complexe
+	 *
+	 * @param {string} userMessage - Message de l'utilisateur
+	 * @param {Object} context - Contexte WordPress
+	 * @returns {Promise<Object>} Plan généré
+	 */
+	async generatePlan(userMessage, context = {}) {
+		logger.info('Generating plan for user request');
+
+		// Créer un message système pour la génération de plan
+		const planSystemPrompt = `Tu es un expert en planification de tâches WordPress.
+Génère un plan d'action structuré pour la requête utilisateur.
+
+IMPORTANT:
+- Décompose la tâche en étapes claires et actionnables
+- Chaque étape doit être une action concrète
+- Utilise le format JSON suivant:
+{
+  "tasks": [
+    { "id": "1", "label": "Description de la tâche 1", "status": "pending" },
+    { "id": "2", "label": "Description de la tâche 2", "status": "pending" }
+  ]
+}
+
+RÈGLES:
+- Maximum 10 tâches
+- Chaque label doit être court et clair (max 100 caractères)
+- Status doit toujours être "pending" initialement`;
+
+		const response = await this.anthropicClient.sendMessage({
+			system: planSystemPrompt,
+			messages: [
+				{
+					role: 'user',
+					content: `Contexte WordPress: ${JSON.stringify(context, null, 2)}\n\nRequête utilisateur: ${userMessage}\n\nGénère le plan d'action au format JSON.`,
+				},
+			],
+			max_tokens: 2048,
+		});
+
+		const responseText = this.anthropicClient.extractText(response);
+
+		// Parser la réponse JSON
+		try {
+			// Extraire le JSON de la réponse (peut être entouré de ```json)
+			const jsonMatch = responseText.match(/\{[\s\S]*\}/);
+			if (jsonMatch) {
+				const plan = JSON.parse(jsonMatch[0]);
+				return plan;
+			}
+		} catch (error) {
+			logger.error('Failed to parse plan JSON', { error: error.message });
+		}
+
+		// Fallback: créer un plan simple
+		return {
+			tasks: [
+				{
+					id: '1',
+					label: userMessage.substring(0, 100),
+					status: 'pending',
+				},
+			],
+		};
 	}
 
 	/**
@@ -224,6 +443,7 @@ export class Orchestrator {
 					messages: conversationHistory,
 					tools: toolsForAnthropic,
 					max_tokens: options.maxTokens || 8192,
+					extended_thinking: options.extended_thinking || false,
 				});
 
 				// Accumuler les tokens utilisés
@@ -320,8 +540,11 @@ export class Orchestrator {
 	 * @param {Function} options.onIterationStart - Callback appelé au début de chaque iteration
 	 * @param {Function} options.onToolCall - Callback appelé avant chaque appel de tool
 	 * @param {Function} options.onToolResult - Callback appelé après chaque résultat de tool
+	 * @param {Function} options.onPlanGenerated - Callback appelé quand un plan est généré (attend validation)
+	 * @param {Function} options.onPlanTaskUpdate - Callback appelé quand une tâche du plan change de statut
 	 * @param {Function} options.onFinalResponse - Callback appelé avec la réponse finale
 	 * @param {Function} options.onError - Callback appelé en cas d'erreur
+	 * @param {boolean} options.skip_plan_mode - Force le skip du plan mode
 	 * @returns {Promise<Object>} Résultat final
 	 */
 	async processRequestStream(userMessage, options = {}) {
@@ -329,11 +552,15 @@ export class Orchestrator {
 			const {
 				conversation_id,
 				wordpress_context,
+				enabled_tools,
 				onIterationStart,
 				onToolCall,
 				onToolResult,
+				onPlanGenerated,
+				onPlanTaskUpdate,
 				onFinalResponse,
 				onError,
+				skip_plan_mode = false,
 				...otherOptions
 			} = options;
 
@@ -343,6 +570,36 @@ export class Orchestrator {
 				conversation_id: conversation_id || 'new',
 				context: wordpress_context
 			});
+
+			// === DÉTECTION DU PLAN MODE ===
+			if (!skip_plan_mode && this.shouldCreatePlan(userMessage)) {
+				logger.info('Plan mode detected, generating plan');
+
+				// Générer le plan
+				const plan = await this.generatePlan(userMessage, wordpress_context);
+
+				// Envoyer le plan au frontend pour validation
+				if (onPlanGenerated) {
+					// Le callback onPlanGenerated doit retourner une Promise qui se résout quand l'utilisateur valide/rejette
+					// Le frontend doit implémenter cette logique
+					const planApproved = await onPlanGenerated(plan);
+
+					if (!planApproved) {
+						logger.info('Plan rejected by user');
+						return {
+							success: false,
+							response: 'Plan rejected by user',
+							plan_rejected: true,
+						};
+					}
+
+					logger.info('Plan approved by user, proceeding with execution');
+
+					// Continuer avec l'exécution du plan
+					// Le reste de la fonction sera exécuté normalement
+					// Les callbacks onPlanTaskUpdate seront appelés pour chaque tâche
+				}
+			}
 
 			// === GESTION DE LA PERSISTANCE DE CONVERSATION ===
 			const conversationManager = getConversationManager();
@@ -365,7 +622,7 @@ export class Orchestrator {
 				previous_messages: conversationHistory.length
 			});
 
-			// IMPORTANT: Si un contexte WordPress existe, injecter un message système au DÉBUT
+			// IMPORTANT: Si un contexte WordPress existe, récupérer et injecter un résumé complet
 			// (uniquement si c'est une nouvelle conversation ou si le contexte a changé)
 			if (wordpress_context && wordpress_context.current_post_id) {
 				// Vérifier si on a déjà injecté le contexte pour cette page
@@ -375,13 +632,74 @@ export class Orchestrator {
 				);
 
 				if (!hasContextForThisPage) {
-					const contextMessage = `CONTEXTE WORDPRESS ACTUEL:
-Tu es actuellement dans l'éditeur de la ${wordpress_context.post_type || 'page'} "${wordpress_context.post_title}" (ID: ${wordpress_context.current_post_id}, statut: ${wordpress_context.post_status || 'unknown'}).
-Cette page contient ${wordpress_context.blocks_count || 0} bloc(s).
+					// Récupérer le contexte enrichi depuis WordPress API
+					let fullContext = null;
+					try {
+						fullContext = await this.wordpressAPI.getPageContext(wordpress_context.current_post_id);
+						logger.info('Full page context retrieved from WordPress API', {
+							post_id: wordpress_context.current_post_id,
+							estimated_tokens: fullContext.estimated_tokens,
+						});
+					} catch (error) {
+						logger.warn('Failed to retrieve full page context, using basic context', {
+							post_id: wordpress_context.current_post_id,
+							error: error.message,
+						});
+					}
 
-⚠️ IMPORTANT: L'utilisateur souhaite MODIFIER CETTE PAGE EXISTANTE, ne crée PAS une nouvelle page sauf si explicitement demandé.
-Si l'utilisateur demande d'ajouter du contenu, utilise les outils pour modifier cette page (ID: ${wordpress_context.current_post_id}).
-`;
+					// Construire le message de contexte
+					let contextMessage = `CURRENT WORDPRESS CONTEXT:\n`;
+
+					if (fullContext) {
+						// Utiliser le contexte enrichi
+						contextMessage += `You are currently editing the ${fullContext.post_type} "${fullContext.post_title}" (ID: ${fullContext.post_id}, status: ${fullContext.post_status}).\n\n`;
+						contextMessage += `CONTENT STRUCTURE:\n`;
+						contextMessage += `- Total blocks: ${fullContext.blocks_count}\n`;
+
+						if (fullContext.blocks_by_type && Object.keys(fullContext.blocks_by_type).length > 0) {
+							contextMessage += `- Block types used:\n`;
+							for (const [blockType, count] of Object.entries(fullContext.blocks_by_type)) {
+								contextMessage += `  * ${blockType}: ${count}\n`;
+							}
+						}
+
+						if (fullContext.categories && fullContext.categories.length > 0) {
+							contextMessage += `- Categories: ${fullContext.categories.join(', ')}\n`;
+						}
+
+						if (fullContext.tags && fullContext.tags.length > 0) {
+							contextMessage += `- Tags: ${fullContext.tags.join(', ')}\n`;
+						}
+
+						if (fullContext.featured_image) {
+							contextMessage += `- Has featured image: yes\n`;
+						}
+
+						if (fullContext.excerpt) {
+							contextMessage += `\nEXCERPT: ${fullContext.excerpt}\n`;
+						}
+					} else {
+						// Fallback: utiliser le contexte basique du frontend
+						contextMessage += `You are currently editing the ${wordpress_context.post_type || 'page'} "${wordpress_context.post_title}" (ID: ${wordpress_context.current_post_id}, status: ${wordpress_context.post_status || 'unknown'}).\n`;
+						contextMessage += `This page contains ${wordpress_context.blocks_count || 0} block(s).\n`;
+					}
+
+					contextMessage += `\n⚠️ IMPORTANT: The user wants to EDIT THIS EXISTING PAGE, do NOT create a new page unless explicitly requested.\n`;
+					contextMessage += `If the user asks to add content, use the tools to modify this page (ID: ${wordpress_context.current_post_id}).`;
+
+					// Ajouter le contexte de block sélectionné s'il existe
+					if (wordpress_context.selected_block) {
+						contextMessage += `\n\nSELECTED BLOCK:\n`;
+						contextMessage += `The user has selected the block "${wordpress_context.selected_block.name}" with clientId "${wordpress_context.selected_block.clientId}".\n`;
+						contextMessage += `⚠️ CRITICAL: When the user asks to modify or edit, they likely want to edit THIS SPECIFIC BLOCK ONLY.\n`;
+						contextMessage += `⚠️ WORKFLOW: 1) Call get_blocks_structure() to get all clientIds, 2) Use update_block_by_clientid with the correct clientId\n`;
+						contextMessage += `⚠️ DO NOT use update_post as it will replace the entire page content!\n`;
+						contextMessage += `Block attributes: ${JSON.stringify(wordpress_context.selected_block.attributes, null, 2)}\n`;
+
+						if (wordpress_context.selected_block.innerBlocks > 0) {
+							contextMessage += `This block contains ${wordpress_context.selected_block.innerBlocks} inner block(s).\n`;
+						}
+					}
 
 					conversationHistory.push({
 						role: 'user',
@@ -390,7 +708,8 @@ Si l'utilisateur demande d'ajouter du contenu, utilise les outils pour modifier 
 
 					logger.info('WordPress context injected into conversation', {
 						post_id: wordpress_context.current_post_id,
-						post_title: wordpress_context.post_title,
+						has_full_context: !!fullContext,
+						has_selected_block: !!wordpress_context.selected_block,
 					});
 				}
 			}
@@ -407,7 +726,18 @@ Si l'utilisateur demande d'ajouter du contenu, utilise les outils pour modifier 
 			const maxIterations = otherOptions.maxIterations || 20;
 			const totalUsage = { input_tokens: 0, output_tokens: 0 };
 
-			const toolsForAnthropic = this.tools.map((t) => ({
+			// Filter tools based on enabled_tools array if provided
+			let availableTools = this.tools;
+			if (enabled_tools && enabled_tools.length > 0) {
+				availableTools = this.tools.filter(tool => enabled_tools.includes(tool.name));
+				logger.info('Tools filtered', {
+					total_tools: this.tools.length,
+					enabled_tools: availableTools.length,
+					tool_names: availableTools.map(t => t.name)
+				});
+			}
+
+			const toolsForAnthropic = availableTools.map((t) => ({
 				name: t.name,
 				description: t.description,
 				input_schema: t.input_schema,
@@ -428,6 +758,7 @@ Si l'utilisateur demande d'ajouter du contenu, utilise les outils pour modifier 
 					messages: conversationHistory,
 					tools: toolsForAnthropic,
 					max_tokens: otherOptions.maxTokens || 8192,
+					extended_thinking: otherOptions.extended_thinking || false,
 				});
 
 				totalUsage.input_tokens += response.usage.input_tokens;
@@ -450,11 +781,19 @@ Si l'utilisateur demande d'ajouter du contenu, utilise les outils pour modifier 
 						}
 
 						try {
-							const result = await this.executeTool(toolCall.name, toolCall.input);
+							const result = await this.executeTool(toolCall.name, toolCall.input, onToolResult);
 
 							// Emit tool success event
+							// Note: Pour les commandes Gutenberg avec _awaitResult, onToolResult a déjà été
+							// appelé dans executeTool. Mais pour les commandes sans _awaitResult (update_block, etc.),
+							// on doit l'appeler ici.
 							if (onToolResult) {
-								onToolResult(toolCall.name, true, result);
+								// Si c'est une commande Gutenberg qui a DÉJÀ été streamée (avec _awaitResult),
+								// ne pas la streamer à nouveau
+								const alreadyStreamed = result._command === 'gutenberg_action' && result.structure;
+								if (!alreadyStreamed) {
+									onToolResult(toolCall.name, true, result);
+								}
 							}
 
 							toolResults.push({
@@ -574,7 +913,7 @@ Si l'utilisateur demande d'ajouter du contenu, utilise les outils pour modifier 
 	 * @param {Object} toolInput - Paramètres du tool
 	 * @returns {Promise<Object>} Résultat du tool
 	 */
-	async executeTool(toolName, toolInput) {
+	async executeTool(toolName, toolInput, onToolResultCallback = null) {
 		try {
 			logger.info(`Executing tool: ${toolName}`, { input: toolInput });
 
@@ -585,7 +924,59 @@ Si l'utilisateur demande d'ajouter du contenu, utilise les outils pour modifier 
 			}
 
 			// Exécuter le handler du tool
-			const result = await tool.handler(toolInput);
+			let result = await tool.handler(toolInput);
+
+			// Si le résultat contient une promesse à attendre (_awaitResult)
+			if (result && result._awaitResult) {
+				logger.info(`Tool ${toolName} requires awaiting iframe response...`);
+
+				// IMPORTANT: Si c'est une commande Gutenberg, l'envoyer IMMÉDIATEMENT au frontend
+				if (result._command === 'gutenberg_action' && onToolResultCallback) {
+					logger.info(`Sending Gutenberg command to frontend IMMEDIATELY`, {
+						action: result.action,
+						requestId: result.requestId,
+					});
+					// Envoyer la commande AVANT d'attendre la réponse
+					onToolResultCallback(toolName, true, result);
+				}
+
+				// IMPORTANT: Sauvegarder _command avant de traiter la promesse
+				const savedCommand = result._command;
+				const savedAction = result.action;
+				const savedRequestId = result.requestId;
+
+				try {
+					// Attendre la réponse de l'iframe (via HTTP callback)
+					const iframeResponse = await result._awaitResult;
+
+					logger.info(`Tool ${toolName} received iframe response`, {
+						hasStructure: !!iframeResponse?.structure,
+					});
+
+					// Fusionner la réponse de l'iframe avec le résultat
+					result = {
+						...result,
+						...iframeResponse,
+					};
+
+					// Supprimer le champ _awaitResult avant de retourner
+					delete result._awaitResult;
+				} catch (error) {
+					logger.error(`Tool ${toolName} - iframe response timeout or error`, {
+						error: error.message,
+					});
+
+					// En cas d'erreur/timeout, retourner une erreur descriptive MAIS garder _command
+					return {
+						_command: savedCommand,  // ← GARDER _command pour que le frontend puisse envoyer la commande
+						action: savedAction,
+						requestId: savedRequestId,
+						success: false,
+						error: `Iframe response timeout: ${error.message}`,
+						message: `⚠️ Impossible de récupérer les données de l'iframe. L'opération a expiré après 10 secondes.`,
+					};
+				}
+			}
 
 			logger.info(`Tool ${toolName} executed successfully`);
 			return result;
